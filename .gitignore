@@ -1,0 +1,62 @@
+# Flutter/Dart
+.DS_Store
+.dart_tool/
+.packages
+pubspec.lock
+build/
+*.iml
+*.iws
+.idea/
+.svn/
+.sass-cache/
+connect.lock/
+*.lock
+.nogitkeep
+*.class
+*.log
+*.pyc
+*.swp
+*~
+.nogitkeep
+/coverage/
+.pub/
+
+# Android
+*.iml
+.gradle
+/local.properties
+/.idea/workspace.xml
+/.idea/libraries
+.DS_Store
+/build
+/captures
+.externalNativeBuild
+
+# iOS
+**/ios/**/*.mode1v3
+**/ios/**/*.mode2v3
+**/ios/**/*.movedown
+**/ios/**/*.moveup
+**/ios/**/*.pbxuser
+**/ios/**/*.perspectivev3
+**/ios/**/breakpoints
+**/ios/**/xcuserdata
+**/ios/**/Pods
+**/ios/**/.symlinks
+**/ios/**/profile
+**/ios/**/xcshareddata
+**/ios/**/Pods/
+
+# Keys and secrets (CRITICAL!)
+android/key.properties
+android/app/google-services.json
+ios/Runner/GoogleService-Info.plist
+*.jks
+*.keystore
+
+# Firebase
+firebase_options.dart
+
+# Environment variables
+.env
+.env.local
