@@ -1,9 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'dart:io';
-import 'package:uuid/uuid.dart';
 import '../models/menu_item.dart';
-import '../services/menu_service.dart';
+import '../services/api_service.dart';
 
 class AddEditMenuItemScreen extends StatefulWidget {
   final MenuItem? menuItem;
@@ -124,56 +123,61 @@ class _AddEditMenuItemScreenState extends State<AddEditMenuItemScreen> {
     if (!_formKey.currentState!.validate()) return;
 
     setState(() => _isLoading = true);
-
-    String imageUrl = _imageUrl ?? '';
-
-    // Upload new image if selected
-    if (_selectedImage != null) {
-      final fileName = '${DateTime.now().millisecondsSinceEpoch}.jpg';
-      imageUrl = await MenuService.uploadImage(_selectedImage!, fileName);
-      if (imageUrl.isEmpty) {
-        setState(() => _isLoading = false);
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Failed to upload image. Please try again.'),
-            backgroundColor: Colors.red,
-          ),
-        );
-        return;
-      }
-    }
-
-    final menuItem = MenuItem(
-      id: widget.menuItem?.id ?? const Uuid().v4(),
-      name: _nameController.text.trim(),
-      price: double.parse(_priceController.text),
-      description: _descriptionController.text.trim(),
-      imageUrl: imageUrl,
-      available: _isAvailable,
-      category: _selectedCategory,
-      createdAt: widget.menuItem?.createdAt ?? DateTime.now(),
-    );
-
-    if (widget.menuItem == null) {
-      await MenuService.addMenuItem(menuItem);
+    final price = double.tryParse(_priceController.text.trim());
+    if (price == null) {
+      setState(() => _isLoading = false);
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Item added successfully!'),
-          backgroundColor: Colors.green,
+          content: Text('Please enter a valid price'),
+          backgroundColor: Colors.red,
         ),
+      );
+      return;
+    }
+
+    Map<String, dynamic> response;
+    if (widget.menuItem == null) {
+      response = await ApiService.addMenuItem(
+        name: _nameController.text.trim(),
+        price: price,
+        description: _descriptionController.text.trim(),
+        category: _selectedCategory,
+        available: _isAvailable,
+        imagePath: _selectedImage?.path,
       );
     } else {
-      await MenuService.updateMenuItem(menuItem);
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Item updated successfully!'),
-          backgroundColor: Colors.blue,
-        ),
+      response = await ApiService.updateMenuItem(
+        id: widget.menuItem!.id,
+        name: _nameController.text.trim(),
+        price: price,
+        description: _descriptionController.text.trim(),
+        category: _selectedCategory,
+        available: _isAvailable,
+        imagePath: _selectedImage?.path,
       );
     }
 
+    if (!mounted) return;
     setState(() => _isLoading = false);
-    Navigator.pop(context);
+
+    final success = response['success'] == true;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          response['message'] ??
+              (success
+                  ? (widget.menuItem == null
+                      ? 'Item added successfully!'
+                      : 'Item updated successfully!')
+                  : 'Operation failed'),
+        ),
+        backgroundColor: success ? Colors.green : Colors.red,
+      ),
+    );
+
+    if (success) {
+      Navigator.pop(context);
+    }
   }
 
   @override

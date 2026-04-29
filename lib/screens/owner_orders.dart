@@ -1,8 +1,9 @@
 import 'package:flutter/material.dart';
-import 'package:firebase_auth/firebase_auth.dart';
-import '../models/user.dart';
+import '../services/api_service.dart';
+import '../models/app_user.dart';
 import '../screens/login_screen.dart';
 import '../screens/menu_management_screen.dart';
+import '../screens/staff_management_screen.dart';
 
 class OwnerOrders extends StatefulWidget {
   final AppUser user;
@@ -14,43 +15,86 @@ class OwnerOrders extends StatefulWidget {
 
 class _OwnerOrdersState extends State<OwnerOrders> {
   int _selectedIndex = 0;
+  List<Map<String, dynamic>> _orders = [];
+  bool _isLoading = true;
 
-  final List<Map<String, dynamic>> _orders = [
-    {
-      'id': 'ORD-001',
-      'customer': 'John Doe',
-      'items': 'Burger, Fries',
-      'total': 12.98,
-      'status': 'pending',
-    },
-    {
-      'id': 'ORD-002',
-      'customer': 'Jane Smith',
-      'items': 'Pizza',
-      'total': 12.99,
-      'status': 'preparing',
-    },
-    {
-      'id': 'ORD-003',
-      'customer': 'Mike Johnson',
-      'items': 'Chicken, Soda',
-      'total': 10.48,
-      'status': 'ready',
-    },
-  ];
-
-  void _acceptOrder(Map<String, dynamic> order) {
-    setState(() => order['status'] = 'preparing');
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('Order ${order['id']} accepted - Preparing food')),
-    );
+  @override
+  void initState() {
+    super.initState();
+    _loadOrders();
   }
 
-  void _markReady(Map<String, dynamic> order) {
-    setState(() => order['status'] = 'ready');
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('Order ${order['id']} is ready for pickup!')),
+  Future<void> _loadOrders() async {
+    setState(() => _isLoading = true);
+    final ordersData = await ApiService.getOrders();
+    if (ordersData.isNotEmpty) {
+      setState(() {
+        _orders = ordersData
+            .map(
+              (order) => {
+                'id': order['id'],
+                'customer': order['customer_name'] ?? 'Customer',
+                'items':
+                    order['items']?.map((item) => item['name']).join(', ') ??
+                    '',
+                'total': order['total'],
+                'status': order['status'],
+              },
+            )
+            .toList();
+      });
+    }
+    setState(() => _isLoading = false);
+  }
+
+  Future<void> _acceptOrder(Map<String, dynamic> order) async {
+    setState(() => order['status'] = 'preparing');
+
+    final response = await ApiService.updateOrderStatus(
+      orderId: order['id'],
+      status: 'preparing',
     );
+
+    if (response['success'] == true) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Order ${order['id']} accepted - Preparing food'),
+        ),
+      );
+      await _loadOrders(); // Refresh orders
+    } else {
+      setState(() => order['status'] = 'pending');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Failed to accept order'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
+  }
+
+  Future<void> _markReady(Map<String, dynamic> order) async {
+    setState(() => order['status'] = 'ready_for_pickup');
+
+    final response = await ApiService.updateOrderStatus(
+      orderId: order['id'],
+      status: 'ready_for_pickup',
+    );
+
+    if (response['success'] == true) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Order ${order['id']} is ready for pickup!')),
+      );
+      await _loadOrders(); // Refresh orders
+    } else {
+      setState(() => order['status'] = 'preparing');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Failed to mark order ready'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
   }
 
   Widget _buildOrdersScreen() {
@@ -60,7 +104,22 @@ class _OwnerOrdersState extends State<OwnerOrders> {
     final preparingOrders = _orders
         .where((o) => o['status'] == 'preparing')
         .toList();
-    final readyOrders = _orders.where((o) => o['status'] == 'ready').toList();
+    final readyOrders = _orders
+        .where((o) => o['status'] == 'ready_for_pickup')
+        .toList();
+
+    if (_orders.isEmpty && !_isLoading) {
+      return const Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.receipt, size: 80, color: Colors.grey),
+            SizedBox(height: 16),
+            Text('No orders yet'),
+          ],
+        ),
+      );
+    }
 
     return Column(
       children: [
@@ -77,67 +136,77 @@ class _OwnerOrdersState extends State<OwnerOrders> {
           ),
         ),
         Expanded(
-          child: ListView.builder(
-            padding: const EdgeInsets.all(16),
-            itemCount: _orders.length,
-            itemBuilder: (context, index) {
-              final order = _orders[index];
-              return Card(
-                child: ExpansionTile(
-                  title: Text('Order ${order['id']} - \$${order['total']}'),
-                  subtitle: Text(
-                    'Status: ${order['status'].toString().toUpperCase()}',
-                  ),
-                  leading: CircleAvatar(
-                    backgroundColor: order['status'] == 'pending'
-                        ? Colors.orange
-                        : order['status'] == 'preparing'
-                        ? Colors.blue
-                        : Colors.green,
-                    child: const Icon(Icons.receipt, color: Colors.white),
-                  ),
-                  children: [
-                    Padding(
-                      padding: const EdgeInsets.all(16),
-                      child: Column(
+          child: _isLoading
+              ? const Center(
+                  child: CircularProgressIndicator(color: Colors.orange),
+                )
+              : ListView.builder(
+                  padding: const EdgeInsets.all(16),
+                  itemCount: _orders.length,
+                  itemBuilder: (context, index) {
+                    final order = _orders[index];
+                    return Card(
+                      child: ExpansionTile(
+                        title: Text(
+                          'Order ${order['id']} - \$${order['total']}',
+                        ),
+                        subtitle: Text(
+                          'Status: ${order['status'].toString().toUpperCase()}',
+                        ),
+                        leading: CircleAvatar(
+                          backgroundColor: order['status'] == 'pending'
+                              ? Colors.orange
+                              : order['status'] == 'preparing'
+                              ? Colors.blue
+                              : Colors.green,
+                          child: const Icon(Icons.receipt, color: Colors.white),
+                        ),
                         children: [
-                          ListTile(
-                            title: Text('Customer: ${order['customer']}'),
-                          ),
-                          ListTile(title: Text('Items: ${order['items']}')),
-                          ListTile(title: Text('Total: \$${order['total']}')),
-                          if (order['status'] == 'pending')
-                            ElevatedButton(
-                              onPressed: () => _acceptOrder(order),
-                              child: const Text('ACCEPT ORDER'),
-                            ),
-                          if (order['status'] == 'preparing')
-                            ElevatedButton(
-                              onPressed: () => _markReady(order),
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: Colors.green,
-                              ),
-                              child: const Text('MARK AS READY'),
-                            ),
-                          if (order['status'] == 'ready')
-                            const Padding(
-                              padding: EdgeInsets.all(8),
-                              child: Text(
-                                '✅ READY FOR PICKUP',
-                                style: TextStyle(
-                                  color: Colors.green,
-                                  fontWeight: FontWeight.bold,
+                          Padding(
+                            padding: const EdgeInsets.all(16),
+                            child: Column(
+                              children: [
+                                ListTile(
+                                  title: Text('Customer: ${order['customer']}'),
                                 ),
-                              ),
+                                ListTile(
+                                  title: Text('Items: ${order['items']}'),
+                                ),
+                                ListTile(
+                                  title: Text('Total: \$${order['total']}'),
+                                ),
+                                if (order['status'] == 'pending')
+                                  ElevatedButton(
+                                    onPressed: () => _acceptOrder(order),
+                                    child: const Text('ACCEPT ORDER'),
+                                  ),
+                                if (order['status'] == 'preparing')
+                                  ElevatedButton(
+                                    onPressed: () => _markReady(order),
+                                    style: ElevatedButton.styleFrom(
+                                      backgroundColor: Colors.green,
+                                    ),
+                                    child: const Text('MARK AS READY'),
+                                  ),
+                                if (order['status'] == 'ready_for_pickup')
+                                  const Padding(
+                                    padding: EdgeInsets.all(8),
+                                    child: Text(
+                                      '✅ READY FOR PICKUP',
+                                      style: TextStyle(
+                                        color: Colors.green,
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                    ),
+                                  ),
+                              ],
                             ),
+                          ),
                         ],
                       ),
-                    ),
-                  ],
+                    );
+                  },
                 ),
-              );
-            },
-          ),
         ),
       ],
     );
@@ -173,6 +242,12 @@ class _OwnerOrdersState extends State<OwnerOrders> {
       (sum, order) => sum + (order['total'] as double),
     );
     final pendingCount = _orders.where((o) => o['status'] == 'pending').length;
+
+    if (_isLoading) {
+      return const Center(
+        child: CircularProgressIndicator(color: Colors.orange),
+      );
+    }
 
     return Center(
       child: Padding(
@@ -253,9 +328,12 @@ class _OwnerOrdersState extends State<OwnerOrders> {
     );
   }
 
-  // UPDATED: Professional Menu Management Screen
   Widget _buildMenuManagementScreen() {
     return const MenuManagementScreen();
+  }
+
+  Widget _buildStaffManagementScreen() {
+    return const StaffManagementScreen();
   }
 
   Widget _buildProfileScreen() {
@@ -304,7 +382,6 @@ class _OwnerOrdersState extends State<OwnerOrders> {
               title: const Text('Logout', style: TextStyle(color: Colors.red)),
               trailing: const Icon(Icons.chevron_right),
               onTap: () async {
-                // Show confirmation dialog
                 final confirm = await showDialog<bool>(
                   context: context,
                   builder: (context) => AlertDialog(
@@ -327,15 +404,12 @@ class _OwnerOrdersState extends State<OwnerOrders> {
                 );
 
                 if (confirm == true) {
-                  // Show loading indicator
                   ScaffoldMessenger.of(context).showSnackBar(
                     const SnackBar(content: Text('Logging out...')),
                   );
 
-                  // Actually sign out from Firebase
-                  await FirebaseAuth.instance.signOut();
+                  await ApiService.logout();
 
-                  // Navigate to login screen and clear all routes
                   if (mounted) {
                     Navigator.of(context).pushAndRemoveUntil(
                       MaterialPageRoute(
@@ -359,6 +433,7 @@ class _OwnerOrdersState extends State<OwnerOrders> {
       _buildOrdersScreen(),
       _buildDashboardScreen(),
       _buildMenuManagementScreen(),
+      _buildStaffManagementScreen(),
       _buildProfileScreen(),
     ];
 
@@ -369,7 +444,9 @@ class _OwnerOrdersState extends State<OwnerOrders> {
         foregroundColor: Colors.white,
         elevation: 0,
       ),
-      body: screens[_selectedIndex],
+      body: _isLoading && _selectedIndex == 0
+          ? const Center(child: CircularProgressIndicator(color: Colors.orange))
+          : screens[_selectedIndex],
       bottomNavigationBar: BottomNavigationBar(
         type: BottomNavigationBarType.fixed,
         currentIndex: _selectedIndex,
@@ -383,6 +460,7 @@ class _OwnerOrdersState extends State<OwnerOrders> {
             label: 'Dashboard',
           ),
           BottomNavigationBarItem(icon: Icon(Icons.menu_book), label: 'Menu'),
+          BottomNavigationBarItem(icon: Icon(Icons.group), label: 'Staff'),
           BottomNavigationBarItem(icon: Icon(Icons.person), label: 'Profile'),
         ],
       ),

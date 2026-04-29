@@ -1,7 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:image_picker/image_picker.dart';
-import 'dart:io';
-import '../services/menu_service.dart';
+import '../services/api_service.dart';
 import '../models/menu_item.dart';
 import 'add_edit_menu_item_screen.dart';
 
@@ -14,6 +12,7 @@ class MenuManagementScreen extends StatefulWidget {
 
 class _MenuManagementScreenState extends State<MenuManagementScreen> {
   String _selectedCategory = 'All';
+  bool _isRefreshing = false;
   final List<String> _categories = [
     'All',
     'Burgers',
@@ -23,6 +22,39 @@ class _MenuManagementScreenState extends State<MenuManagementScreen> {
     'Desserts',
     'Salads',
   ];
+
+  String _resolveImageUrl(String? raw) {
+    if (raw == null || raw.isEmpty) return '';
+    if (raw.startsWith('http')) return raw;
+    final host = ApiService.baseUrl.replaceAll('/api', '');
+    return '$host/$raw';
+  }
+
+  MenuItem _menuItemFromApi(Map<String, dynamic> data) {
+    return MenuItem(
+      id: data['id']?.toString() ?? '',
+      name: data['name']?.toString() ?? '',
+      price: double.tryParse(data['price']?.toString() ?? '0') ?? 0,
+      description: data['description']?.toString() ?? '',
+      imageUrl: _resolveImageUrl(data['image_url']?.toString()),
+      available: data['available'] == true,
+      category: data['category']?.toString() ?? 'Main',
+      createdAt: DateTime.tryParse(data['createdAt']?.toString() ?? '') ??
+          DateTime.now(),
+    );
+  }
+
+  Future<List<MenuItem>> _fetchMenuItems() async {
+    // Owner/staff menu management must always see all items, including unavailable.
+    final data = await ApiService.getMenuItems(
+      category: _selectedCategory,
+      availableOnly: false,
+    );
+    return data
+        .whereType<Map<String, dynamic>>()
+        .map(_menuItemFromApi)
+        .toList();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -111,8 +143,8 @@ class _MenuManagementScreenState extends State<MenuManagementScreen> {
           ),
           // Menu Items List
           Expanded(
-            child: StreamBuilder<List<MenuItem>>(
-              stream: MenuService.getMenuItems(),
+            child: FutureBuilder<List<MenuItem>>(
+              future: _fetchMenuItems(),
               builder: (context, snapshot) {
                 if (snapshot.hasError) {
                   return Center(
@@ -137,14 +169,7 @@ class _MenuManagementScreenState extends State<MenuManagementScreen> {
                   );
                 }
 
-                final items = snapshot.data ?? [];
-
-                // Filter by category
-                final filteredItems = _selectedCategory == 'All'
-                    ? items
-                    : items
-                          .where((item) => item.category == _selectedCategory)
-                          .toList();
+                final filteredItems = snapshot.data ?? [];
 
                 if (filteredItems.isEmpty) {
                   return Center(
@@ -188,29 +213,10 @@ class _MenuManagementScreenState extends State<MenuManagementScreen> {
   Widget _buildMenuItemCard(MenuItem item) {
     return Card(
       margin: const EdgeInsets.only(bottom: 16),
-      elevation: 4,
+      elevation: 6,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-      child: Stack(
-        children: [
-          // Available/Unavailable overlay
-          if (!item.available)
-            Container(
-              decoration: BoxDecoration(
-                color: Colors.black.withOpacity(0.6),
-                borderRadius: BorderRadius.circular(16),
-              ),
-              child: const Center(
-                child: Text(
-                  'UNAVAILABLE',
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontWeight: FontWeight.bold,
-                    fontSize: 18,
-                  ),
-                ),
-              ),
-            ),
-          Row(
+      child: IntrinsicHeight(
+        child: Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               // Menu Image
@@ -219,28 +225,26 @@ class _MenuManagementScreenState extends State<MenuManagementScreen> {
                   topLeft: Radius.circular(16),
                   bottomLeft: Radius.circular(16),
                 ),
-                child: item.imageUrl.isNotEmpty
-                    ? Image.network(
-                        item.imageUrl,
-                        width: 120,
-                        height: 120,
-                        fit: BoxFit.cover,
-                        errorBuilder: (context, error, stackTrace) {
-                          return Container(
-                            width: 120,
-                            height: 120,
-                            color: Colors.grey.shade200,
-                            child: Icon(
-                              Icons.fastfood,
-                              size: 40,
-                              color: Colors.grey.shade400,
-                            ),
-                          );
-                        },
-                      )
-                    : Container(
-                        width: 120,
-                        height: 120,
+                child: SizedBox(
+                  width: 108,
+                  height: double.infinity,
+                  child: item.imageUrl.isNotEmpty
+                      ? Image.network(
+                          item.imageUrl,
+                          fit: BoxFit.cover,
+                          errorBuilder: (context, error, stackTrace) {
+                            return Container(
+                              color: Colors.grey.shade200,
+                              child: Icon(
+                                Icons.fastfood,
+                                size: 40,
+                                color: Colors.grey.shade400,
+                              ),
+                            );
+                          },
+                        )
+                      : Container(
+                        width: 108,
                         color: Colors.grey.shade200,
                         child: Icon(
                           Icons.fastfood,
@@ -248,50 +252,76 @@ class _MenuManagementScreenState extends State<MenuManagementScreen> {
                           color: Colors.grey.shade400,
                         ),
                       ),
+                ),
               ),
               // Menu Details
               Expanded(
                 child: Padding(
-                  padding: const EdgeInsets.all(12),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 10,
+                  ),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
                         item.name,
                         style: const TextStyle(
-                          fontSize: 18,
+                          fontSize: 16,
                           fontWeight: FontWeight.bold,
                         ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
                       ),
-                      const SizedBox(height: 4),
+                      const SizedBox(height: 6),
                       Text(
-                        item.description,
+                        item.description.isEmpty
+                            ? 'No description provided'
+                            : item.description,
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(
                           fontSize: 12,
                           color: Colors.grey.shade600,
+                          height: 1.25,
                         ),
                       ),
-                      const SizedBox(height: 8),
+                      const SizedBox(height: 10),
                       Row(
                         children: [
-                          Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 8,
-                              vertical: 4,
-                            ),
-                            decoration: BoxDecoration(
-                              color: Colors.orange.shade50,
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                            child: Text(
-                              '\$${item.price.toStringAsFixed(2)}',
-                              style: const TextStyle(
-                                color: Colors.orange,
-                                fontWeight: FontWeight.bold,
+                          Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 8,
+                                  vertical: 4,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: Colors.orange.shade100,
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                                child: Text(
+                                  '\$${item.price.toStringAsFixed(2)}',
+                                  style: TextStyle(
+                                    color: Colors.orange.shade900,
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 12,
+                                  ),
+                                ),
                               ),
-                            ),
+                              const SizedBox(height: 4),
+                              Text(
+                                item.available ? 'Available' : 'Unavailable',
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  color: item.available
+                                      ? Colors.green.shade700
+                                      : Colors.red.shade700,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ],
                           ),
                           const SizedBox(width: 8),
                           Container(
@@ -300,14 +330,15 @@ class _MenuManagementScreenState extends State<MenuManagementScreen> {
                               vertical: 4,
                             ),
                             decoration: BoxDecoration(
-                              color: Colors.grey.shade100,
+                              color: Colors.blueGrey.shade50,
                               borderRadius: BorderRadius.circular(12),
                             ),
                             child: Text(
                               item.category,
                               style: TextStyle(
                                 fontSize: 11,
-                                color: Colors.grey.shade600,
+                                color: Colors.blueGrey.shade700,
+                                fontWeight: FontWeight.w600,
                               ),
                             ),
                           ),
@@ -330,24 +361,13 @@ class _MenuManagementScreenState extends State<MenuManagementScreen> {
                   ),
                   Switch(
                     value: item.available,
-                    onChanged: (value) {
-                      MenuService.toggleAvailability(item.id, value);
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(
-                          content: Text(
-                            '${item.name} is now ${value ? "available" : "unavailable"}',
-                          ),
-                          backgroundColor: value ? Colors.green : Colors.red,
-                        ),
-                      );
-                    },
+                    onChanged: (_) => _toggleAvailability(item),
                     activeColor: Colors.green,
                   ),
                 ],
               ),
             ],
           ),
-        ],
       ),
     );
   }
@@ -434,13 +454,39 @@ class _MenuManagementScreenState extends State<MenuManagementScreen> {
     );
 
     if (confirm == true) {
-      await MenuService.deleteMenuItem(item.id);
+      final response = await ApiService.deleteMenuItem(item.id);
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Item deleted'),
-          backgroundColor: Colors.red,
+        SnackBar(
+          content: Text(
+            response['success'] == true
+                ? 'Item deleted'
+                : (response['message'] ?? 'Failed to delete item'),
+          ),
+          backgroundColor:
+              response['success'] == true ? Colors.red : Colors.orange,
         ),
       );
+      if (response['success'] == true) {
+        setState(() {});
+      }
+    }
+  }
+
+  Future<void> _toggleAvailability(MenuItem item) async {
+    if (_isRefreshing) return;
+    _isRefreshing = true;
+    final response = await ApiService.toggleMenuAvailability(item.id);
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(response['message'] ?? 'Availability updated'),
+        backgroundColor: response['success'] == true ? Colors.green : Colors.red,
+      ),
+    );
+    _isRefreshing = false;
+    if (response['success'] == true) {
+      setState(() {});
     }
   }
 
@@ -450,6 +496,6 @@ class _MenuManagementScreenState extends State<MenuManagementScreen> {
       MaterialPageRoute(
         builder: (context) => AddEditMenuItemScreen(menuItem: menuItem),
       ),
-    );
+    ).then((_) => setState(() {}));
   }
 }

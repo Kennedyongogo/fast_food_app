@@ -1,6 +1,6 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <application
-        android:label="fastfood_app"
+        android:label="FastFood Express"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity
@@ -20,6 +20,13 @@
               android:name="io.flutter.embedding.android.NormalTheme"
               android:resource="@style/NormalTheme"
               />
+            <!--
+              Forces the Flutter engine startup splash to use our drawable.
+              This prevents the default Flutter logo from flashing before Dart loads.
+            -->
+            <meta-data
+              android:name="io.flutter.embedding.android.SplashScreenDrawable"
+              android:resource="@drawable/launch_background" />
             <intent-filter>
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>

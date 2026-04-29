@@ -1,17 +1,26 @@
 import 'package:flutter/material.dart';
-import 'package:firebase_core/firebase_core.dart';
-import 'package:firebase_auth/firebase_auth.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
+import 'services/api_service.dart';
+import 'models/app_user.dart';
 import 'screens/login_screen.dart';
 import 'screens/owner_setup.dart';
-import 'screens/customer_home.dart';
 import 'screens/owner_orders.dart';
-import 'screens/rider_tasks.dart';
-import 'models/user.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await Firebase.initializeApp();
+
+  // Test API connection (optional - remove after testing)
+  try {
+    print('Testing API connection...');
+    // Just a test call to check if backend is reachable
+    final response = await ApiService.login(
+      email: 'test@example.com',
+      password: 'test123',
+    );
+    print('API Response: $response');
+  } catch (e) {
+    print('API Error (ignore if backend not running yet): $e');
+  }
+
   runApp(const FastFoodApp());
 }
 
@@ -88,43 +97,36 @@ class _SplashScreenState extends State<SplashScreen>
 
   Future<void> _checkAuthState() async {
     try {
-      // Check if owner exists in Firestore
-      final ownerQuery = await FirebaseFirestore.instance
-          .collection('users')
-          .where('role', isEqualTo: 'owner')
-          .limit(1)
-          .get();
+      // Source of truth: check owner existence from backend DB
+      final ownerExists = await ApiService.ownerExists();
 
       setState(() {
-        _ownerExists = ownerQuery.docs.isNotEmpty;
+        _ownerExists = ownerExists;
       });
 
-      // Check if user is logged in
-      final currentUser = FirebaseAuth.instance.currentUser;
+      // Check if user is logged in via API
+      final userData = await ApiService.getCurrentUser();
 
-      if (currentUser != null && _ownerExists) {
-        final userDoc = await FirebaseFirestore.instance
-            .collection('users')
-            .doc(currentUser.uid)
-            .get();
-
-        if (userDoc.exists) {
-          final userData = userDoc.data()!;
-          if (userData['role'] == 'owner') {
-            _loggedInUser = AppUser(
-              id: currentUser.uid,
-              name: userData['name'] ?? '',
-              email: userData['email'] ?? '',
-              role: 'owner',
-              phone: userData['phone'] ?? '',
-              createdAt: userData['createdAt'] != null
-                  ? (userData['createdAt'] as Timestamp).toDate()
-                  : DateTime.now(),
-            );
-            setState(() {
-              _isLoggedIn = true;
-            });
-          }
+      if (userData != null && userData['success'] == true) {
+        final payload = userData['data'] is Map<String, dynamic>
+            ? userData['data'] as Map<String, dynamic>
+            : <String, dynamic>{};
+        final user = userData['user'] ?? payload['user'] ?? userData['data'];
+        if (user == null || user is! Map) {
+          return;
+        }
+        if (user['role'] == 'owner') {
+          _loggedInUser = AppUser(
+            id: user['id'],
+            name: user['full_name'],
+            email: user['email'],
+            role: user['role'],
+            phone: user['phone'] ?? '',
+            createdAt: DateTime.now(),
+          );
+          setState(() {
+            _isLoggedIn = true;
+          });
         }
       }
     } catch (e) {

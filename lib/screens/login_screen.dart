@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
-import 'package:firebase_auth/firebase_auth.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
-import '../models/user.dart'; // Use AppUser class
+import '../services/api_service.dart';
+import '../models/app_user.dart';
 import 'customer_home.dart';
 import 'owner_orders.dart';
 import 'rider_tasks.dart';
@@ -51,35 +50,28 @@ class _LoginScreenState extends State<LoginScreen> {
     }
 
     try {
-      // 1. Create user in Firebase Authentication
-      final userCredential = await FirebaseAuth.instance
-          .createUserWithEmailAndPassword(
-            email: _emailController.text.trim(),
-            password: _passwordController.text.trim(),
-          );
-
-      // 2. Save user data to Firestore using AppUser class
-      final newUser = AppUser(
-        id: userCredential.user!.uid,
-        name: _nameController.text.trim(),
+      final response = await ApiService.register(
+        fullName: _nameController.text.trim(),
         email: _emailController.text.trim(),
-        role: _selectedRole,
+        password: _passwordController.text,
         phone: _phoneController.text.trim(),
-        createdAt: DateTime.now(),
+        role: _selectedRole,
       );
 
-      await FirebaseFirestore.instance
-          .collection('users')
-          .doc(userCredential.user!.uid)
-          .set(newUser.toFirestore());
+      print('Register response: $response');
 
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Registration successful! Please login.'),
-            backgroundColor: Colors.green,
-          ),
-        );
+      // Check different response formats
+      if (response['success'] == true ||
+          response['status'] == 'success' ||
+          response['data'] != null) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Registration successful! Please login.'),
+              backgroundColor: Colors.green,
+            ),
+          );
+        }
 
         setState(() {
           _isLogin = true;
@@ -89,15 +81,16 @@ class _LoginScreenState extends State<LoginScreen> {
           _emailController.clear();
           _passwordController.clear();
         });
+      } else {
+        setState(() {
+          _errorMessage = response['message'] ?? 'Registration failed';
+          _isLoading = false;
+        });
       }
-    } on FirebaseAuthException catch (e) {
-      setState(() {
-        _errorMessage = _getErrorMessage(e.code);
-        _isLoading = false;
-      });
     } catch (e) {
+      print('Register error: $e');
       setState(() {
-        _errorMessage = 'An error occurred. Please try again.';
+        _errorMessage = 'Network error: ${e.toString()}';
         _isLoading = false;
       });
     }
@@ -119,83 +112,83 @@ class _LoginScreenState extends State<LoginScreen> {
     }
 
     try {
-      // 1. Sign in with Firebase Authentication
-      final userCredential = await FirebaseAuth.instance
-          .signInWithEmailAndPassword(
-            email: _emailController.text.trim(),
-            password: _passwordController.text.trim(),
+      final response = await ApiService.login(
+        email: _emailController.text.trim(),
+        password: _passwordController.text,
+      );
+
+      print('Login response: $response');
+
+      // Check different response formats from your backend
+      // Your backend returns: { success: true, data: { user: {...}, token: "..." } }
+      if (response['success'] == true) {
+        // Get user from data.user (your backend structure)
+        final userData = response['data']?['user'] ?? response['user'];
+
+        if (userData != null) {
+          final role = userData['role'];
+
+          final user = AppUser(
+            id: userData['id'],
+            name: userData['full_name'] ?? userData['name'],
+            email: userData['email'],
+            role: role,
+            phone: userData['phone'] ?? '',
+            createdAt: DateTime.now(),
           );
 
-      // 2. Get user data from Firestore
-      final userDoc = await FirebaseFirestore.instance
-          .collection('users')
-          .doc(userCredential.user!.uid)
-          .get();
-
-      if (!userDoc.exists) {
-        setState(() {
-          _errorMessage = 'User data not found.';
-          _isLoading = false;
-        });
-        return;
-      }
-
-      // 3. Create AppUser object from Firestore data
-      final user = AppUser.fromFirestore(userDoc.data()!, userDoc.id);
-
-      // 4. Navigate based on role
-      if (mounted) {
-        if (user.role == 'customer') {
-          Navigator.pushReplacement(
-            context,
-            MaterialPageRoute(builder: (context) => CustomerHome(user: user)),
-          );
-        } else if (user.role == 'owner') {
-          Navigator.pushReplacement(
-            context,
-            MaterialPageRoute(builder: (context) => OwnerOrders(user: user)),
-          );
-        } else if (user.role == 'rider') {
-          Navigator.pushReplacement(
-            context,
-            MaterialPageRoute(builder: (context) => RiderTasks(user: user)),
-          );
+          if (mounted) {
+            if (role == 'customer') {
+              Navigator.pushReplacement(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => CustomerHome(user: user),
+                ),
+              );
+            } else if (role == 'owner') {
+              Navigator.pushReplacement(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => OwnerOrders(user: user),
+                ),
+              );
+            } else if (role == 'rider') {
+              Navigator.pushReplacement(
+                context,
+                MaterialPageRoute(builder: (context) => RiderTasks(user: user)),
+              );
+            } else if (role == 'staff') {
+              Navigator.pushReplacement(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => OwnerOrders(user: user),
+                ),
+              );
+            } else {
+              setState(() {
+                _errorMessage = 'Unknown role: $role';
+                _isLoading = false;
+              });
+            }
+          }
         } else {
           setState(() {
-            _errorMessage = 'Unknown role: ${user.role}';
+            _errorMessage = 'User data not found in response';
             _isLoading = false;
           });
         }
+      } else {
+        setState(() {
+          _errorMessage = response['message'] ?? 'Invalid credentials';
+          _isLoading = false;
+        });
       }
-
-      setState(() => _isLoading = false);
-    } on FirebaseAuthException catch (e) {
-      setState(() {
-        _errorMessage = _getErrorMessage(e.code);
-        _isLoading = false;
-      });
     } catch (e) {
+      print('Login error: $e');
       setState(() {
-        _errorMessage = 'An error occurred. Please try again.';
+        _errorMessage = 'Network error. Please check your connection.';
         _isLoading = false;
       });
-    }
-  }
-
-  String _getErrorMessage(String code) {
-    switch (code) {
-      case 'user-not-found':
-        return 'No user found with this email. Please register first.';
-      case 'wrong-password':
-        return 'Incorrect password. Please try again.';
-      case 'email-already-in-use':
-        return 'Email already registered. Please login or use another email.';
-      case 'weak-password':
-        return 'Password should be at least 6 characters.';
-      case 'invalid-email':
-        return 'Please enter a valid email address.';
-      default:
-        return 'Authentication failed. Please try again.';
     }
   }
 
@@ -396,8 +389,6 @@ class _LoginScreenState extends State<LoginScreen> {
                         ),
                       ],
                     ),
-
-                    // Demo accounts section completely removed
                   ],
                 ),
               ),

@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
-import 'package:firebase_auth/firebase_auth.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import '../services/api_service.dart';
+import '../models/app_user.dart';
 import 'owner_orders.dart';
-import '../models/user.dart';
 
 class OwnerSetupScreen extends StatefulWidget {
   const OwnerSetupScreen({super.key});
@@ -47,73 +47,70 @@ class _OwnerSetupScreenState extends State<OwnerSetupScreen> {
     }
 
     try {
-      // Check if owner already exists
-      final ownerCheck = await FirebaseFirestore.instance
-          .collection('users')
-          .where('role', isEqualTo: 'owner')
-          .limit(1)
-          .get();
-
-      if (ownerCheck.docs.isNotEmpty) {
-        setState(() {
-          _errorMessage = 'Owner account already exists! Please login.';
-          _isLoading = false;
-        });
-        return;
-      }
-
-      // Create user in Firebase Authentication
-      final userCredential = await FirebaseAuth.instance
-          .createUserWithEmailAndPassword(
-            email: _emailController.text.trim(),
-            password: _passwordController.text.trim(),
-          );
-
-      // Save owner data to Firestore
-      final owner = AppUser(
-        id: userCredential.user!.uid,
-        name: _nameController.text.trim(),
+      // Create first owner account via one-time setup endpoint
+      final response = await ApiService.setupOwner(
+        fullName: _nameController.text.trim(),
         email: _emailController.text.trim(),
-        role: 'owner',
+        password: _passwordController.text,
         phone: _phoneController.text.trim(),
-        createdAt: DateTime.now(),
       );
 
-      await FirebaseFirestore.instance
-          .collection('users')
-          .doc(userCredential.user!.uid)
-          .set(owner.toFirestore());
+      print('Owner registration response: $response');
 
-      // Navigate to Owner Dashboard
-      if (mounted) {
-        Navigator.pushReplacement(
-          context,
-          MaterialPageRoute(builder: (context) => OwnerOrders(user: owner)),
-        );
+      if (response['success'] == true || response['status'] == 'success') {
+        final responseData = response['data'] as Map<String, dynamic>? ?? {};
+        final userData = responseData['user'] as Map<String, dynamic>?;
+        final token = responseData['token'] as String?;
+        if (userData != null && token != null) {
+          // Persist auth returned by setup-owner endpoint
+          final prefs = await SharedPreferences.getInstance();
+          await prefs.setString('auth_token', token);
+          await prefs.setString('user_id', userData['id']);
+          await prefs.setString('user_role', userData['role'] ?? 'owner');
+
+          await prefs.setBool('owner_exists', true);
+
+          final owner = AppUser(
+            id: userData['id'],
+            name: userData['full_name'] ?? userData['name'],
+            email: userData['email'],
+            role: 'owner',
+            phone: userData['phone'] ?? '',
+            createdAt: DateTime.now(),
+          );
+
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('Owner account created successfully!'),
+                backgroundColor: Colors.green,
+              ),
+            );
+
+            Navigator.pushReplacement(
+              context,
+              MaterialPageRoute(builder: (context) => OwnerOrders(user: owner)),
+            );
+          }
+        } else {
+          setState(() {
+            _errorMessage = response['message'] ?? 'Owner setup succeeded but login data is missing';
+            _isLoading = false;
+          });
+        }
+      } else {
+        setState(() {
+          _errorMessage =
+              response['message'] ?? 'Failed to create owner account';
+          _isLoading = false;
+        });
       }
-    } on FirebaseAuthException catch (e) {
-      setState(() {
-        _errorMessage = _getErrorMessage(e.code);
-        _isLoading = false;
-      });
     } catch (e) {
+      print('Owner creation error: $e');
       setState(() {
-        _errorMessage = 'An error occurred. Please try again.';
+        _errorMessage = 'Network error: ${e.toString()}';
         _isLoading = false;
       });
-    }
-  }
-
-  String _getErrorMessage(String code) {
-    switch (code) {
-      case 'email-already-in-use':
-        return 'Email already in use. Please use another email.';
-      case 'weak-password':
-        return 'Password should be at least 6 characters.';
-      case 'invalid-email':
-        return 'Please enter a valid email address.';
-      default:
-        return 'Authentication failed. Please try again.';
     }
   }
 

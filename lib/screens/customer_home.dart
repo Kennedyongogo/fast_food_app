@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
-import 'package:firebase_auth/firebase_auth.dart';
-import '../models/user.dart';
+import '../services/api_service.dart';
+import '../models/app_user.dart';
 import '../screens/login_screen.dart';
 
 class CustomerHome extends StatefulWidget {
@@ -14,100 +14,158 @@ class CustomerHome extends StatefulWidget {
 class _CustomerHomeState extends State<CustomerHome> {
   int _selectedIndex = 0;
 
-  // Menu data
-  final List<Map<String, dynamic>> _menuItems = [
-    {
-      'id': 1,
-      'name': '🍔 Beef Burger',
-      'price': 8.99,
-      'description': 'Juicy beef patty with lettuce, tomato, and cheese',
-    },
-    {
-      'id': 2,
-      'name': '🍕 Pepperoni Pizza',
-      'price': 12.99,
-      'description': 'Classic pepperoni with mozzarella cheese',
-    },
-    {
-      'id': 3,
-      'name': '🍟 French Fries',
-      'price': 3.99,
-      'description': 'Crispy golden fries with salt',
-    },
-    {
-      'id': 4,
-      'name': '🥤 Soft Drink',
-      'price': 2.49,
-      'description': 'Coke, Sprite, or Fanta',
-    },
-    {
-      'id': 5,
-      'name': '🍗 Fried Chicken',
-      'price': 7.99,
-      'description': 'Crispy fried chicken (2 pieces)',
-    },
-    {
-      'id': 6,
-      'name': '🥗 Caesar Salad',
-      'price': 6.49,
-      'description': 'Fresh salad with Caesar dressing',
-    },
-  ];
+  // Menu data from API
+  List<Map<String, dynamic>> _menuItems = [];
+  final Map<String, int> _cart = {}; // itemId -> quantity
+  List<Map<String, dynamic>> _orders = [];
+  bool _isLoading = true;
 
-  final Map<int, int> _cart = {};
+  String _resolveImageUrl(String? raw) {
+    if (raw == null || raw.isEmpty) return '';
+    final normalized = raw.replaceAll('\\', '/');
+    if (normalized.startsWith('http')) return normalized;
+    final host = ApiService.baseUrl.replaceAll('/api', '');
+    return '$host/$normalized';
+  }
 
   int get _totalItems => _cart.values.fold(0, (sum, qty) => sum + qty);
 
   double get _totalAmount {
     double total = 0;
     _cart.forEach((itemId, quantity) {
-      final item = _menuItems.firstWhere((item) => item['id'] == itemId);
+      final item = _menuItems.firstWhere(
+        (item) => item['id'].toString() == itemId,
+      );
       total += (item['price'] as double) * quantity;
     });
     return total;
   }
 
-  // Mock orders for tracking
-  final List<Map<String, dynamic>> _orders = [
-    {
-      'id': 'ORD-001',
-      'status': 'delivered',
-      'total': 12.98,
-      'date': '2026-04-28',
-    },
-    {
-      'id': 'ORD-002',
-      'status': 'preparing',
-      'total': 24.97,
-      'date': '2026-04-28',
-    },
-  ];
+  @override
+  void initState() {
+    super.initState();
+    _loadData();
+  }
 
-  void _placeOrder() {
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Order Placed! 🎉'),
-        content: Text(
-          'Order for $_totalItems item(s) totaling \$${_totalAmount.toStringAsFixed(2)}\n\nStatus: PENDING\n\nThe owner will be notified.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () {
-              Navigator.pop(context);
-              setState(() => _cart.clear());
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(
-                  content: Text('Order placed! Track it in "My Orders"'),
-                  backgroundColor: Colors.green,
+  Future<void> _loadData() async {
+    setState(() => _isLoading = true);
+
+    // Load only available menu items for customers
+    final menuData = await ApiService.getMenuItems(availableOnly: true);
+    if (menuData.isNotEmpty) {
+      setState(() {
+        _menuItems = menuData
+            .where((item) => item['available'] == true)
+            .map(
+              (item) => {
+                'id': item['id'],
+                'name': item['name'],
+                'price': double.tryParse(item['price'].toString()) ?? 0.0,
+                'description': item['description'] ?? '',
+                'image_url': _resolveImageUrl(
+                  (item['image_url'] ??
+                          item['imageUrl'] ??
+                          item['image'])
+                      ?.toString(),
                 ),
-              );
-            },
-            child: const Text('OK'),
+              },
+            )
+            .toList();
+      });
+    }
+
+    // Load orders
+    final ordersData = await ApiService.getOrders();
+    if (ordersData.isNotEmpty) {
+      setState(() {
+        _orders = ordersData
+            .map(
+              (order) => {
+                'id': order['id'],
+                'status': order['status'],
+                'total': order['total'],
+                'date': order['created_at'] != null
+                    ? DateTime.parse(
+                        order['created_at'],
+                      ).toString().substring(0, 10)
+                    : DateTime.now().toString().substring(0, 10),
+              },
+            )
+            .toList();
+      });
+    }
+
+    setState(() => _isLoading = false);
+  }
+
+  Future<void> _placeOrder() async {
+    if (_cart.isEmpty) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Your cart is empty')));
+      return;
+    }
+
+    setState(() => _isLoading = true);
+
+    // Prepare order items
+    final orderItems = _cart.entries.map((entry) {
+      final item = _menuItems.firstWhere(
+        (i) => i['id'].toString() == entry.key,
+      );
+      return {
+        'item_id': entry.key,
+        'name': item['name'],
+        'price': item['price'],
+        'quantity': entry.value,
+      };
+    }).toList();
+
+    try {
+      final response = await ApiService.placeOrder(
+        items: orderItems,
+        total: _totalAmount,
+        deliveryAddress:
+            'Customer Address', // You can add address selection later
+        latitude: 0.0, // Add geolocation later
+        longitude: 0.0,
+      );
+
+      if (response['success'] == true) {
+        setState(() {
+          _cart.clear();
+        });
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Order placed successfully!'),
+            backgroundColor: Colors.green,
           ),
-        ],
-      ),
-    );
+        );
+
+        // Refresh orders
+        await _loadData();
+
+        // Switch to My Orders tab
+        setState(() => _selectedIndex = 2);
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(response['message'] ?? 'Failed to place order'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Network error: ${e.toString()}'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
+
+    setState(() => _isLoading = false);
   }
 
   void _showCart() {
@@ -117,6 +175,7 @@ class _CustomerHomeState extends State<CustomerHome> {
       ).showSnackBar(const SnackBar(content: Text('Cart is empty')));
       return;
     }
+
     showModalBottomSheet(
       context: context,
       builder: (context) => Container(
@@ -128,8 +187,11 @@ class _CustomerHomeState extends State<CustomerHome> {
               'Your Cart',
               style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
             ),
+            const SizedBox(height: 16),
             ..._cart.entries.map((entry) {
-              final item = _menuItems.firstWhere((i) => i['id'] == entry.key);
+              final item = _menuItems.firstWhere(
+                (i) => i['id'].toString() == entry.key,
+              );
               return ListTile(
                 leading: Text('${entry.value}x'),
                 title: Text(item['name']),
@@ -156,19 +218,67 @@ class _CustomerHomeState extends State<CustomerHome> {
     );
   }
 
-  // Menu Screen
   Widget _buildMenuScreen() {
+    if (_menuItems.isEmpty) {
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.restaurant_menu, size: 80, color: Colors.grey.shade400),
+            const SizedBox(height: 16),
+            Text(
+              'No menu items available',
+              style: TextStyle(color: Colors.grey.shade600),
+            ),
+          ],
+        ),
+      );
+    }
+
     return ListView.builder(
       padding: const EdgeInsets.all(16),
       itemCount: _menuItems.length,
       itemBuilder: (context, index) {
         final item = _menuItems[index];
-        final quantity = _cart[item['id']] ?? 0;
+        final itemId = item['id'].toString();
+        final quantity = _cart[itemId] ?? 0;
         return Card(
           child: Padding(
             padding: const EdgeInsets.all(12),
             child: Row(
               children: [
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(12),
+                  child: item['image_url'] != null &&
+                          item['image_url'].toString().isNotEmpty
+                      ? Image.network(
+                          item['image_url'].toString(),
+                          width: 80,
+                          height: 80,
+                          fit: BoxFit.cover,
+                          errorBuilder: (context, error, stackTrace) {
+                            return Container(
+                              width: 80,
+                              height: 80,
+                              color: Colors.grey.shade200,
+                              child: Icon(
+                                Icons.fastfood,
+                                color: Colors.grey.shade400,
+                              ),
+                            );
+                          },
+                        )
+                      : Container(
+                          width: 80,
+                          height: 80,
+                          color: Colors.grey.shade200,
+                          child: Icon(
+                            Icons.fastfood,
+                            color: Colors.grey.shade400,
+                          ),
+                        ),
+                ),
+                const SizedBox(width: 12),
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -180,10 +290,12 @@ class _CustomerHomeState extends State<CustomerHome> {
                           fontWeight: FontWeight.bold,
                         ),
                       ),
+                      const SizedBox(height: 4),
                       Text(
                         item['description'],
                         style: TextStyle(fontSize: 12, color: Colors.grey[600]),
                       ),
+                      const SizedBox(height: 8),
                       Text(
                         '\$${item['price']}',
                         style: const TextStyle(
@@ -206,10 +318,11 @@ class _CustomerHomeState extends State<CustomerHome> {
                         icon: const Icon(Icons.remove, size: 20),
                         onPressed: quantity > 0
                             ? () => setState(() {
-                                if (quantity == 1)
-                                  _cart.remove(item['id']);
-                                else
-                                  _cart[item['id']] = quantity - 1;
+                                if (quantity == 1) {
+                                  _cart.remove(itemId);
+                                } else {
+                                  _cart[itemId] = quantity - 1;
+                                }
                               })
                             : null,
                       ),
@@ -219,8 +332,9 @@ class _CustomerHomeState extends State<CustomerHome> {
                       ),
                       IconButton(
                         icon: const Icon(Icons.add, size: 20),
-                        onPressed: () =>
-                            setState(() => _cart[item['id']] = quantity + 1),
+                        onPressed: () => setState(() {
+                          _cart[itemId] = quantity + 1;
+                        }),
                       ),
                     ],
                   ),
@@ -233,7 +347,6 @@ class _CustomerHomeState extends State<CustomerHome> {
     );
   }
 
-  // Cart Screen
   Widget _buildCartScreen() {
     if (_cart.isEmpty) {
       return Center(
@@ -264,7 +377,9 @@ class _CustomerHomeState extends State<CustomerHome> {
             itemCount: _cart.length,
             itemBuilder: (context, index) {
               final itemId = _cart.keys.elementAt(index);
-              final item = _menuItems.firstWhere((i) => i['id'] == itemId);
+              final item = _menuItems.firstWhere(
+                (i) => i['id'].toString() == itemId,
+              );
               final quantity = _cart[itemId]!;
               return Card(
                 child: ListTile(
@@ -278,23 +393,30 @@ class _CustomerHomeState extends State<CustomerHome> {
                   title: Text(item['name']),
                   subtitle: Text('\$${item['price']} each'),
                   trailing: Column(
+                    mainAxisSize: MainAxisSize.min,
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
                       Text(
                         '\$${(item['price'] * quantity).toStringAsFixed(2)}',
                         style: const TextStyle(fontWeight: FontWeight.bold),
                       ),
-                      IconButton(
-                        icon: const Icon(
-                          Icons.remove_circle,
-                          color: Colors.red,
-                        ),
-                        onPressed: () => setState(() {
-                          if (quantity == 1)
+                      const SizedBox(height: 2),
+                      GestureDetector(
+                        onTap: () => setState(() {
+                          if (quantity == 1) {
                             _cart.remove(itemId);
-                          else
+                          } else {
                             _cart[itemId] = quantity - 1;
+                          }
                         }),
+                        child: const Padding(
+                          padding: EdgeInsets.all(2),
+                          child: Icon(
+                            Icons.remove_circle,
+                            color: Colors.red,
+                            size: 20,
+                          ),
+                        ),
                       ),
                     ],
                   ),
@@ -347,8 +469,28 @@ class _CustomerHomeState extends State<CustomerHome> {
     );
   }
 
-  // My Orders Screen
   Widget _buildOrdersScreen() {
+    if (_orders.isEmpty) {
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.receipt, size: 80, color: Colors.grey.shade400),
+            const SizedBox(height: 16),
+            Text(
+              'No orders yet',
+              style: TextStyle(color: Colors.grey.shade600),
+            ),
+            const SizedBox(height: 8),
+            ElevatedButton(
+              onPressed: () => setState(() => _selectedIndex = 0),
+              child: const Text('Start Ordering'),
+            ),
+          ],
+        ),
+      );
+    }
+
     return ListView.builder(
       padding: const EdgeInsets.all(16),
       itemCount: _orders.length,
@@ -366,9 +508,13 @@ class _CustomerHomeState extends State<CustomerHome> {
             statusColor = Colors.blue;
             statusIcon = Icons.kitchen;
             break;
-          case 'delivered':
+          case 'ready_for_pickup':
             statusColor = Colors.green;
             statusIcon = Icons.check_circle;
+            break;
+          case 'delivered':
+            statusColor = Colors.green;
+            statusIcon = Icons.delivery_dining;
             break;
           default:
             statusColor = Colors.grey;
@@ -384,7 +530,7 @@ class _CustomerHomeState extends State<CustomerHome> {
             title: Text('Order ${order['id']}'),
             subtitle: Text('${order['date']} • \$${order['total']}'),
             trailing: Chip(
-              label: Text(order['status'].toUpperCase()),
+              label: Text(order['status'].toString().toUpperCase()),
               backgroundColor: statusColor.withOpacity(0.2),
             ),
             onTap: () {
@@ -396,7 +542,9 @@ class _CustomerHomeState extends State<CustomerHome> {
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       ListTile(
-                        title: Text('Status: ${order['status'].toUpperCase()}'),
+                        title: Text(
+                          'Status: ${order['status'].toString().toUpperCase()}',
+                        ),
                       ),
                       ListTile(title: Text('Total: \$${order['total']}')),
                       ListTile(title: Text('Date: ${order['date']}')),
@@ -417,7 +565,6 @@ class _CustomerHomeState extends State<CustomerHome> {
     );
   }
 
-  // Profile Screen
   Widget _buildProfileScreen() {
     return Center(
       child: Padding(
@@ -464,7 +611,6 @@ class _CustomerHomeState extends State<CustomerHome> {
               title: const Text('Logout', style: TextStyle(color: Colors.red)),
               trailing: const Icon(Icons.chevron_right),
               onTap: () async {
-                // Show confirmation dialog
                 final confirm = await showDialog<bool>(
                   context: context,
                   builder: (context) => AlertDialog(
@@ -487,15 +633,12 @@ class _CustomerHomeState extends State<CustomerHome> {
                 );
 
                 if (confirm == true) {
-                  // Show loading indicator
                   ScaffoldMessenger.of(context).showSnackBar(
                     const SnackBar(content: Text('Logging out...')),
                   );
 
-                  // Actually sign out from Firebase
-                  await FirebaseAuth.instance.signOut();
+                  await ApiService.logout();
 
-                  // Navigate to login screen and clear all routes
                   if (mounted) {
                     Navigator.of(context).pushAndRemoveUntil(
                       MaterialPageRoute(
@@ -528,7 +671,7 @@ class _CustomerHomeState extends State<CustomerHome> {
         backgroundColor: Colors.orange,
         foregroundColor: Colors.white,
         actions: [
-          if (_selectedIndex == 0) // Show cart badge only on menu
+          if (_selectedIndex == 0)
             Stack(
               children: [
                 IconButton(
@@ -563,7 +706,9 @@ class _CustomerHomeState extends State<CustomerHome> {
             ),
         ],
       ),
-      body: screens[_selectedIndex],
+      body: _isLoading
+          ? const Center(child: CircularProgressIndicator(color: Colors.orange))
+          : screens[_selectedIndex],
       bottomNavigationBar: BottomNavigationBar(
         type: BottomNavigationBarType.fixed,
         currentIndex: _selectedIndex,

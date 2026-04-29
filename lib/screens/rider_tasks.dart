@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
-import 'package:firebase_auth/firebase_auth.dart';
-import '../models/user.dart';
+import '../services/api_service.dart';
+import '../models/app_user.dart';
 import '../screens/login_screen.dart';
 
 class RiderTasks extends StatefulWidget {
@@ -13,80 +13,161 @@ class RiderTasks extends StatefulWidget {
 
 class _RiderTasksState extends State<RiderTasks> {
   int _selectedIndex = 0;
-
-  final List<Map<String, dynamic>> _deliveries = [
-    {
-      'id': 'ORD-001',
-      'customer': 'John Doe',
-      'address': '123 Main St',
-      'status': 'ready',
-      'restaurant': 'FastFood Express',
-      'earnings': 5.00,
-    },
-    {
-      'id': 'ORD-002',
-      'customer': 'Jane Smith',
-      'address': '456 Oak Ave',
-      'status': 'picked_up',
-      'restaurant': 'FastFood Express',
-      'earnings': 5.00,
-    },
-    {
-      'id': 'ORD-003',
-      'customer': 'Mike Johnson',
-      'address': '789 Pine Rd',
-      'status': 'delivered',
-      'restaurant': 'FastFood Express',
-      'earnings': 5.00,
-    },
-  ];
+  List<Map<String, dynamic>> _deliveries = [];
+  bool _isLoading = true;
 
   double get _todayEarnings {
     return _deliveries
         .where((d) => d['status'] == 'delivered')
-        .fold(0.0, (sum, d) => sum + (d['earnings'] as double));
+        .fold(0.0, (sum, d) => sum + (d['earnings'] ?? 0.0));
   }
 
-  void _acceptDelivery(Map<String, dynamic> delivery) {
+  @override
+  void initState() {
+    super.initState();
+    _loadDeliveries();
+  }
+
+  Future<void> _loadDeliveries() async {
+    setState(() => _isLoading = true);
+
+    // Get all orders that are ready for pickup or assigned to this rider
+    final ordersData = await ApiService.getOrders();
+
+    if (ordersData.isNotEmpty) {
+      // Filter orders relevant for rider
+      final riderOrders = ordersData.where((order) {
+        return order['status'] == 'ready_for_pickup' ||
+            order['status'] == 'accepted' ||
+            order['status'] == 'picked_up' ||
+            order['status'] == 'delivered';
+      }).toList();
+
+      setState(() {
+        _deliveries = riderOrders
+            .map(
+              (order) => {
+                'id': order['id'],
+                'customer': order['customer_name'] ?? 'Customer',
+                'address': order['delivery_address'] ?? 'No address',
+                'status': order['status'],
+                'restaurant': 'FastFood Express',
+                'earnings': order['status'] == 'delivered' ? 5.00 : 0.00,
+              },
+            )
+            .toList();
+      });
+    }
+
+    setState(() => _isLoading = false);
+  }
+
+  Future<void> _acceptDelivery(Map<String, dynamic> delivery) async {
     setState(() => delivery['status'] = 'accepted');
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(
-          'Delivery for ${delivery['id']} accepted! Go to restaurant.',
+
+    final response = await ApiService.updateOrderStatus(
+      orderId: delivery['id'],
+      status: 'accepted',
+    );
+
+    if (response['success'] == true) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Delivery for ${delivery['id']} accepted! Go to restaurant.',
+          ),
         ),
-      ),
-    );
+      );
+      await _loadDeliveries(); // Refresh list
+    } else {
+      setState(() => delivery['status'] = 'ready_for_pickup');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Failed to accept delivery'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
   }
 
-  void _pickUp(Map<String, dynamic> delivery) {
+  Future<void> _pickUp(Map<String, dynamic> delivery) async {
     setState(() => delivery['status'] = 'picked_up');
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('Food picked up! Delivering to ${delivery['customer']}.'),
-      ),
+
+    final response = await ApiService.updateOrderStatus(
+      orderId: delivery['id'],
+      status: 'picked_up',
     );
+
+    if (response['success'] == true) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Food picked up! Delivering to ${delivery['customer']}.',
+          ),
+        ),
+      );
+      await _loadDeliveries(); // Refresh list
+    } else {
+      setState(() => delivery['status'] = 'accepted');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Failed to update status'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
   }
 
-  void _deliver(Map<String, dynamic> delivery) {
+  Future<void> _deliver(Map<String, dynamic> delivery) async {
     setState(() => delivery['status'] = 'delivered');
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('✅ Delivery completed!'),
-        backgroundColor: Colors.green,
-      ),
+
+    final response = await ApiService.updateOrderStatus(
+      orderId: delivery['id'],
+      status: 'delivered',
     );
+
+    if (response['success'] == true) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('✅ Delivery completed!'),
+          backgroundColor: Colors.green,
+        ),
+      );
+      await _loadDeliveries(); // Refresh list
+    } else {
+      setState(() => delivery['status'] = 'picked_up');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Failed to complete delivery'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
   }
 
   Widget _buildAvailableScreen() {
     final availableDeliveries = _deliveries
-        .where((d) => d['status'] == 'ready')
+        .where((d) => d['status'] == 'ready_for_pickup')
         .toList();
+
+    if (_isLoading) {
+      return const Center(
+        child: CircularProgressIndicator(color: Colors.orange),
+      );
+    }
 
     if (availableDeliveries.isEmpty) {
       return Center(
-        child: Text(
-          'No deliveries available',
-          style: TextStyle(color: Colors.grey[600]),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.delivery_dining, size: 80, color: Colors.grey.shade400),
+            const SizedBox(height: 16),
+            Text(
+              'No deliveries available',
+              style: TextStyle(color: Colors.grey[600]),
+            ),
+          ],
         ),
       );
     }
@@ -147,11 +228,24 @@ class _RiderTasksState extends State<RiderTasks> {
         .where((d) => d['status'] == 'accepted' || d['status'] == 'picked_up')
         .toList();
 
+    if (_isLoading) {
+      return const Center(
+        child: CircularProgressIndicator(color: Colors.orange),
+      );
+    }
+
     if (activeDeliveries.isEmpty) {
       return Center(
-        child: Text(
-          'No active deliveries',
-          style: TextStyle(color: Colors.grey[600]),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.motorcycle, size: 80, color: Colors.grey.shade400),
+            const SizedBox(height: 16),
+            Text(
+              'No active deliveries',
+              style: TextStyle(color: Colors.grey[600]),
+            ),
+          ],
         ),
       );
     }
@@ -219,6 +313,12 @@ class _RiderTasksState extends State<RiderTasks> {
     final completedDeliveries = _deliveries
         .where((d) => d['status'] == 'delivered')
         .toList();
+
+    if (_isLoading) {
+      return const Center(
+        child: CircularProgressIndicator(color: Colors.orange),
+      );
+    }
 
     return Center(
       child: Padding(
@@ -333,7 +433,7 @@ class _RiderTasksState extends State<RiderTasks> {
               leading: const Icon(Icons.history),
               title: const Text('Delivery History'),
               trailing: const Icon(Icons.chevron_right),
-              onTap: () {},
+              onTap: () => setState(() => _selectedIndex = 2),
             ),
             ListTile(
               leading: const Icon(Icons.help),
@@ -346,7 +446,6 @@ class _RiderTasksState extends State<RiderTasks> {
               title: const Text('Logout', style: TextStyle(color: Colors.red)),
               trailing: const Icon(Icons.chevron_right),
               onTap: () async {
-                // Show confirmation dialog
                 final confirm = await showDialog<bool>(
                   context: context,
                   builder: (context) => AlertDialog(
@@ -369,15 +468,12 @@ class _RiderTasksState extends State<RiderTasks> {
                 );
 
                 if (confirm == true) {
-                  // Show loading indicator
                   ScaffoldMessenger.of(context).showSnackBar(
                     const SnackBar(content: Text('Logging out...')),
                   );
 
-                  // Actually sign out from Firebase
-                  await FirebaseAuth.instance.signOut();
+                  await ApiService.logout();
 
-                  // Navigate to login screen and clear all routes
                   if (mounted) {
                     Navigator.of(context).pushAndRemoveUntil(
                       MaterialPageRoute(

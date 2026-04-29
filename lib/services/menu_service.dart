@@ -21,44 +21,94 @@ class MenuService {
         });
   }
 
-  // Add new menu item with image
+  // Upload image to Firebase Storage
   static Future<String> uploadImage(File imageFile, String fileName) async {
     try {
+      print('📸 Starting image upload...');
+      print('📸 File path: ${imageFile.path}');
+      print('📸 File size: ${await imageFile.length()} bytes');
+
       final ref = _storage.ref().child('menu_images/$fileName');
-      final uploadTask = await ref.putFile(imageFile);
+
+      // Add metadata
+      final metadata = SettableMetadata(
+        contentType: 'image/jpeg',
+        customMetadata: {
+          'uploadedAt': DateTime.now().toString(),
+          'fileName': fileName,
+        },
+      );
+
+      print('📸 Uploading to Firebase Storage...');
+      final uploadTask = await ref.putFile(imageFile, metadata);
+      print('📸 Upload complete!');
+
       final imageUrl = await uploadTask.ref.getDownloadURL();
+      print('📸 Download URL: $imageUrl');
+
       return imageUrl;
+    } on FirebaseException catch (e) {
+      print('❌ Firebase Storage error: ${e.code} - ${e.message}');
+      return '';
     } catch (e) {
-      print('Image upload error: $e');
+      print('❌ Image upload error: $e');
       return '';
     }
   }
 
   // Add menu item to Firestore
   static Future<void> addMenuItem(MenuItem item) async {
-    await _firestore
-        .collection(_collection)
-        .doc(item.id)
-        .set(item.toFirestore());
+    try {
+      print('📝 Adding menu item to Firestore...');
+      await _firestore
+          .collection(_collection)
+          .doc(item.id)
+          .set(item.toFirestore());
+      print('✅ Menu item added successfully!');
+    } catch (e) {
+      print('❌ Error adding menu item: $e');
+      rethrow;
+    }
   }
 
   // Update menu item
   static Future<void> updateMenuItem(MenuItem item) async {
-    await _firestore
-        .collection(_collection)
-        .doc(item.id)
-        .update(item.toFirestore());
+    try {
+      print('📝 Updating menu item in Firestore...');
+      await _firestore
+          .collection(_collection)
+          .doc(item.id)
+          .update(item.toFirestore());
+      print('✅ Menu item updated successfully!');
+    } catch (e) {
+      print('❌ Error updating menu item: $e');
+      rethrow;
+    }
   }
 
   // Delete menu item
   static Future<void> deleteMenuItem(String id) async {
-    await _firestore.collection(_collection).doc(id).delete();
+    try {
+      print('🗑️ Deleting menu item...');
+      await _firestore.collection(_collection).doc(id).delete();
+      print('✅ Menu item deleted successfully!');
+    } catch (e) {
+      print('❌ Error deleting menu item: $e');
+      rethrow;
+    }
   }
 
   // Toggle availability
   static Future<void> toggleAvailability(String id, bool available) async {
-    await _firestore.collection(_collection).doc(id).update({
-      'available': available,
-    });
+    try {
+      print('🔄 Toggling availability to: $available');
+      await _firestore.collection(_collection).doc(id).update({
+        'available': available,
+      });
+      print('✅ Availability toggled successfully!');
+    } catch (e) {
+      print('❌ Error toggling availability: $e');
+      rethrow;
+    }
   }
 }
